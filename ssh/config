@@ -1,0 +1,16 @@
+AddKeysToAgent  yes
+IdentitiesOnly yes
+
+Host github-personal
+  HostName github.com
+  AddKeysToAgent yes
+  User btdrucker
+  IdentityFile ~/.ssh/id_rsa
+
+Host github.com
+  HostName github.com
+  UseKeychain yes
+  AddKeysToAgent yes
+  IdentityFile ~/.ssh/id_ed25519_work
+
+

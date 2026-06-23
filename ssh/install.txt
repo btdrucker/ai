@@ -1,0 +1,18 @@
+💻 On your new laptop (download + decrypt)
+5. Decrypt the archive
+gpg --decrypt ssh_keys.tar.gpg > ssh_keys.tar
+
+￼
+6. Extract into .ssh
+mkdir -p ~/.ssh
+tar -xvf ssh_keys.tar -C ~/.ssh
+
+￼
+7. Fix permissions
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/id_rsa
+chmod 644 ~/.ssh/id_rsa.pub
+
+￼
+8. (Optional) load key
+ssh-add ~/.ssh/id_rsa
