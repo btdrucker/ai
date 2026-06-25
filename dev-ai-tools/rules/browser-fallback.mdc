@@ -1,0 +1,33 @@
+---
+description: Fast-fail to the built-in browser when a page requires authentication
+alwaysApply: true
+applyTo: "**"
+---
+
+<!-- Dual-purpose: Cursor reads alwaysApply, Copilot reads applyTo. -->
+
+## Browser fallback
+
+If `WebFetch` returns a login page, SSO prompt, or auth error, immediately
+use `cursor-ide-browser` (`browser_navigate` + `browser_snapshot`) instead.
+Do not troubleshoot the fetch or try other MCP servers first.
+
+- For JIRA/Confluence data, use `user-atlassian-mcp-server` or
+  `user-nike-dev-integration-system-mcp` instead of the browser.
+
+## SSO-protected pages
+
+When a URL requires SSO/corporate authentication:
+
+1. Open it in the IDE browser with `position: "beside"` so the user can
+   see the page and sign in themselves.
+2. Do NOT attempt to automate the SSO login flow -- the user must
+   complete it interactively.
+3. Do NOT fall back to `open` (system browser) -- the user needs the
+   page in the IDE browser so the agent can interact with it afterward.
+4. Tell the user the browser panel is open and ask them to sign in.
+5. Once the user confirms they are authenticated, use `browser_snapshot`
+   to read the page and continue.
+6. If the direct URL fails to load or gets stuck after SSO, navigate to
+   the Okta home page (`https://nike.okta.com`) first so the user can
+   sign in there, then navigate back to the original URL.

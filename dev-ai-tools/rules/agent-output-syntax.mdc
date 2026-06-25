@@ -1,0 +1,19 @@
+---
+description: Formatting conventions and project context for agent-generated text
+alwaysApply: true
+applyTo: "**"
+---
+
+<!-- Dual-purpose: Cursor reads alwaysApply, Copilot reads applyTo. -->
+
+## dev-ai-tools version
+
+Read the `VERSION` file in the `search.tool.dev-ai-tools` repo root for the current version.
+
+## Plain ASCII text
+
+Use plain ASCII characters instead of Unicode equivalents unless Unicode is genuinely required (e.g. a proper noun, a language that needs it, or a symbol with no ASCII equivalent).
+
+- Use `--` instead of the em dash or en dash Unicode characters
+- Use `"` and `'` instead of curly/smart quote Unicode characters
+- Use `...` instead of the ellipsis Unicode character

@@ -1,0 +1,21 @@
+---
+description: Require agentic disclaimer on GitHub comments posted by the agent
+alwaysApply: true
+---
+
+# GitHub Agent Disclaimer
+
+When posting any comment or message to GitHub on behalf of the user (issue comments, PR comments, review comments, discussion posts), **always** include an agentic disclaimer line at the top of the comment body.
+
+The disclaimer must be the first line, formatted as a blockquote:
+
+```
+> *Posted by AI agent on behalf of @{username} — not written directly by a human*
+```
+
+Replace `{username}` with the authenticated GitHub user's login.
+
+**Applies to:** all GitHub comments posted via API (`POST`/`PATCH` to issues, pulls, discussions).
+**Does not apply to:** PR descriptions (the body of `gh pr create` or the PR body itself).
+
+If a skill already defines its own disclaimer (eg the autonomous PR review skill), use that skill's wording instead — don't double up.

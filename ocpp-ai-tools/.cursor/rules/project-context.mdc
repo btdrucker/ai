@@ -1,0 +1,14 @@
+---
+description: Context for agents working on the ocpp-ai-tools catalog repo
+alwaysApply: true
+---
+
+# ocpp-ai-tools Project Context
+
+This repo is a browsable catalog of agent rules and skills. The artifacts in `rules/` and `skills/` are not for this repo -- they are for teammates to copy into their own environments.
+
+When adding or editing catalog artifacts:
+- Update the README.md catalog table to match any additions, removals, or renames
+- Skills must follow the agentskills.io specification (name matches directory, SKILL.md under 500 lines)
+- Rules must have YAML frontmatter with `description` and either `alwaysApply: true` or `globs`
+- All artifacts must score 4+ on the team's evaluation rubric (docs/evaluation-rubric.md)

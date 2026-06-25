@@ -1,0 +1,64 @@
+---
+description: Prefer self-documenting code over comments in all programming languages
+alwaysApply: true
+---
+
+# Minimal Comments in Code
+
+When writing or modifying source code (not documentation, README files, prose, or config/infrastructure files), follow this hierarchy before adding any comment:
+
+1. **Make the code speak first** — rename variables, functions, classes, or parameters so intent is obvious.
+2. **Refactor for clarity** — extract a well-named method, simplify a conditional, or restructure logic so comments become unnecessary.
+3. **Comment only what the code cannot say** — non-obvious *why*, regulatory/business constraints, subtle gotchas, or necessary workarounds.
+
+## Rules
+
+- Avoid doc comments (Javadoc, JSDoc, docstrings, etc.) unless the method is part of a public API surface consumed by other teams, or project tooling requires them.
+- Never narrate what the code already says (e.g., `// increment counter`, `// return result`).
+- Avoid `@param` / `@return` tags that merely repeat the parameter name or type. If project linting enforces these tags, keep descriptions meaningful rather than redundant.
+- If a function signature + name fully describes behavior and it's not a public API, skip the doc comment.
+- One-line comments are preferred over multi-line when a comment is warranted.
+- Comments in config files, Dockerfiles, and infrastructure-as-code follow different norms — this rule does not apply there.
+
+## When comments are acceptable
+
+- Explaining *why* something non-obvious is done (not *what*).
+- Linking to a ticket, spec, or external reference for context.
+- Warning about side effects, concurrency concerns, or performance implications that aren't apparent from the code.
+- `TODO` / `FIXME` / `HACK` markers for flagging future work — keep these concise and include a ticket reference when possible.
+
+## Examples
+
+```java
+// ❌ BAD — restates the obvious
+/** Gets the name. @return the name */
+public String getName() { return name; }
+
+// ✅ GOOD — signature is self-explanatory, no comment needed
+public String getName() { return name; }
+```
+
+```python
+# ❌ BAD — narrates the code
+# Loop through users and check if active
+for user in users:
+    if user.is_active:
+
+# ✅ GOOD — rename or restructure instead
+active_users = [u for u in users if u.is_active]
+```
+
+```java
+// ✅ GOOD — explains a non-obvious constraint
+// Upstream API returns HTTP 200 with error body; status alone is unreliable
+if (response.body().containsKey("error")) {
+```
+
+```java
+// ✅ GOOD — public API consumed by other teams; doc comment adds value
+/**
+ * Resolves the product price after applying regional tax rules and promotional discounts.
+ * Returns the base price unchanged when no rules match.
+ */
+public Money resolvePrice(Product product, Region region) {
+```

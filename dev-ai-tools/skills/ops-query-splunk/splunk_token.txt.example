@@ -1,0 +1,12 @@
+# Splunk JWT token for nike.splunkcloud.com
+#
+# Setup:
+#   1. Go to https://nike.splunkcloud.com/en-US/app/initialize_nike/welcome_nike
+#   2. Settings -> Tokens -> New Token -> Create
+#   3. Copy the token (shown only once)
+#   4. Run: cp .cursor/skills/ops-query-splunk/splunk_token.txt.example .cursor/skills/ops-query-splunk/splunk_token.txt
+#   5. Replace everything in .cursor/skills/ops-query-splunk/splunk_token.txt with your raw token (no quotes, no trailing newline)
+#
+# Alternatively, export SPLUNK_JWT_TOKEN=<your-token> in your shell or place a shared fallback token at ~/.cursor/skills/ops-query-splunk/splunk_token.txt.
+#
+# splunk_token.txt is gitignored -- never commit a real token.
