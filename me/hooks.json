@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "type": "prompt",
+        "prompt": "Review the agent session context in $ARGUMENTS. If the user fixed the same type of bug, performed the same task, or you made the same kind of correction more than once during this session, output JSON with a single 'followup_message' field suggesting in 1-2 sentences that they create a Cursor rule or skill to automate the pattern. Be specific about what the pattern was. If there is no clear recurring pattern, output {}.",
+        "timeout": 20
+      }
+    ]
+  }
+}

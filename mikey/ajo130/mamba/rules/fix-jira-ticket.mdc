@@ -1,0 +1,277 @@
+---
+description: "Fix a Jira ticket end-to-end: read ticket, create worktree branch, plan the fix, implement, code review, and surface results. Invoke when asked to fix a Jira ticket, e.g. 'fix MMBA-1234'."
+alwaysApply: false
+---
+
+# Fix Jira Ticket — mpe.app.mamba-android
+
+End-to-end workflow: read the ticket, isolate work in a git worktree, plan, implement, review, hand off for human approval, and clean up the worktree. All work happens in a worktree so multiple agents can fix different tickets in parallel.
+
+---
+
+## Step 1 — Read the Jira ticket
+
+Use the Atlassian MCP `jira_get_issue` tool to fetch the ticket:
+
+```
+tool:  jira_get_issue
+args:  issue_key: "<TICKET-ID>"
+       fields: "*all"
+       expand: "renderedFields"
+       comment_limit: 20
+```
+
+Extract and summarize:
+- **Summary / title**
+- **Description** (rendered HTML from `renderedFields`)
+- **Acceptance criteria** (often in description or a custom field)
+- **Priority & status**
+- **Labels, components, fix version**
+- **Comments** — scan for clarifications from teammates
+- **Linked issues / subtasks** — note dependencies
+- **Attachments** — note any screenshots or files referenced
+
+Print the summary for the developer so they can confirm understanding.
+
+---
+
+## Step 2 — Create the worktree branch
+
+Run the setup script to create an isolated worktree:
+
+```bash
+bash scripts/setup-worktree.sh --ticket <TICKET-ID>
+```
+
+This creates branch `<prefix>/<TICKET-ID>` in a sibling directory. The default prefix is `$USER` (see `setup-worktree.sh --help` for `--prefix`). The script prints **`Repo:`** (primary clone path) and **`Worktree:`** (checkout directory). Capture both for the rest of the workflow:
+
+- **`MAMBA_REPO`** — path from the `Repo:` line (required for Step 7: `worktree remove`, `worktree prune`, and `branch -d` run against the primary clone; after removal the worktree path no longer exists).
+- **`WT`** — worktree path from the **`Worktree:`** line (or the path printed after `Done. Worktree ready at:` — the script ends with that path so the last line of output is always the worktree directory). Do not parse `NOTE:` lines as the path.
+
+Use `git -C "$WT" branch --show-current` when you need the exact branch name (e.g. for push).
+
+**Stay in the current window.** All git and Gradle commands target the worktree via its path:
+
+```bash
+git -C "$WT" ...
+cd "$WT" && ./gradlew ...
+```
+
+`gh` has no `-C` / repo-dir flag. To create a PR while the shell cwd is still the primary clone, either run `cd "$WT" && gh ...` so GitHub CLI sees the feature branch, or stay put and pass `--head "$(git -C "$WT" branch --show-current)"` (and any other `gh pr create` flags you need).
+
+If the developer wants full IDE integration (autocomplete, inline lints), suggest opening the worktree in a second Cursor window: `cursor "$WT"`.
+
+**Gitignored files:** The script auto-symlinks the root `local.properties` so Gradle can find the Android SDK. Included builds (e.g. `mpe.foundation.clickstream/Android`) have their own `local.properties` that is also gitignored — copy it into the corresponding path in the worktree so Gradle composite builds can resolve the SDK. If the fix touches signing or release builds, other gitignored files (e.g. `signing.properties`, keystores) may also need manual setup in the worktree.
+
+---
+
+## Step 3 — Plan the fix
+
+### Discover Gradle module paths
+
+Before planning, resolve the Gradle module names for the areas you will touch. Directory paths do not match Gradle project names in this repo (e.g. `components/shop-carousel/impl` is Gradle module `:shop-carousel-component:impl`).
+
+```bash
+# 1. Get the directory path (strip /src/... suffix)
+echo "<file-path>" | sed 's|/src/.*||' | sort -u
+# 2. Look up the Gradle project name in settings
+grep "<dir-name>" settings.gradle.kts
+```
+
+Keep the resolved module names handy — Steps 4 and 5 need them for scoped Gradle tasks.
+
+### Review Figma designs (if provided)
+
+If the ticket description, comments, or attachments contain a Figma URL, follow the [Figma integration workflow](figma-integration.md) to fetch design context before planning. The Figma design is the source of truth for any UI/visual changes — reference it throughout the plan and implementation.
+
+### Create a concrete plan
+
+Before writing any code:
+
+1. **Explore the codebase** — use Grep, SemanticSearch, and Read to understand the relevant modules, classes, and data flow.
+2. **Identify the root cause** — for bugs, trace the issue. For features, identify where the new code fits.
+3. **List the files to change** — be specific: file path, what changes, and why.
+4. **Note test changes** — which existing tests need updating, and what new tests are needed.
+5. **Flag risks** — breaking changes, API compatibility, performance concerns.
+
+### Resolve ambiguities BEFORE coding
+
+If ANYTHING is unclear — acceptance criteria, expected behavior, edge cases, scope boundaries — **stop and ask the developer**. Use the AskQuestion tool for structured questions when possible. Common ambiguities to watch for:
+
+- Ticket says "fix X" but doesn't specify the expected behavior
+- Multiple valid approaches exist with different trade-offs
+- Unclear if the fix should be scoped to one module or cross-cutting
+- Missing context about related features or recent refactors
+- Ticket references designs or specs not attached
+
+**Do not guess. Ask.**
+
+Present the plan to the developer and wait for approval before proceeding.
+
+---
+
+## Step 4 — Implement the fix
+
+> **MANDATORY:** All four substeps below must be completed before moving to Step 5. Do NOT skip "Run PRA checks" or "Visual verification".
+
+After the plan is approved:
+
+1. **Make the code changes** following the plan. Respect project conventions:
+   - Follow `build-quality.mdc` rules (detekt, spotless, etc.)
+   - Use `internal` visibility by default
+   - Use version catalog for dependencies
+   - Follow ViewModel architecture rules (single `_state: MutableStateFlow`)
+
+2. **Write/update tests** — every fix needs test coverage:
+   - Unit tests for new/changed logic
+   - Update existing tests that are affected
+   - Verify tests pass in the worktree
+
+3. **Run PRA checks** — follow the `pra-fix.mdc` rule, scoped to the modules identified in Step 3. It handles auto-fixes (spotless, sort, apiDump), verification (detekt, apiCheck), and fixing any failures. **Do NOT proceed until all checks pass.**
+
+4. **Visual verification** — for UI/cosmetic changes, build and install the app on an Android emulator to confirm the fix looks correct. Use the **mobile-mcp** (`user-mobile-mcp`) for all emulator interaction:
+
+   a. Build the debug APK:
+      ```bash
+      cd "$WT" && ./gradlew assembleDebug
+      ```
+
+   b. List available devices to get the emulator device ID:
+      ```
+      tool:  mobile_list_available_devices  (server: user-mobile-mcp)
+      ```
+      If no emulator is running, ask the developer to start one.
+
+   c. Install the APK on the emulator:
+      ```
+      tool:  mobile_install_app  (server: user-mobile-mcp)
+      args:  device: "<device-id>"
+             path: "<path-to-debug.apk>"
+      ```
+
+   d. Launch the app:
+      ```
+      tool:  mobile_launch_app  (server: user-mobile-mcp)
+      args:  device: "<device-id>"
+             packageName: "com.nike.mamba.debug"
+      ```
+
+   e. Take a screenshot to verify the fix:
+      ```
+      tool:  mobile_take_screenshot  (server: user-mobile-mcp)
+      args:  device: "<device-id>"
+      ```
+      Use `mobile_list_elements_on_screen` and `mobile_click_on_screen_at_coordinates` to navigate to the affected screen if needed.
+
+   **Only skip this step if the change has zero visual impact** (e.g. pure logic, analytics, networking, or test-only changes). If Figma designs were fetched in Step 3, compare the screenshot against the Figma design to confirm fidelity.
+
+---
+
+## Step 5 — Code review
+
+Choose the review depth based on total diff size (insertions + deletions across all files):
+
+```bash
+git -C "$WT" diff HEAD --stat | tail -1
+```
+
+### Under 100 lines changed — lightweight review
+
+Run **Blind Hunter** and **Edge Case Hunter** as two parallel subagents:
+
+- **Blind Hunter** receives only the diff (no project context). Prompt: find bugs, regressions, or issues purely from the code.
+- **Edge Case Hunter** receives the diff plus read access to the project. Prompt: walk every branching path and boundary condition, report only unhandled edge cases.
+
+Triage findings into **patch** (fixable now), **defer** (pre-existing), or **dismiss** (noise).
+
+### 100+ lines changed — full BMAD review
+
+Invoke the `bmad-code-review` skill. This launches the full interactive workflow with three parallel review layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor) plus structured triage and presentation.
+
+### After either review path
+
+**Fix what you can:**
+- Address all **patch** findings immediately
+- Re-run PRA checks after fixes
+
+**Surface what you can't:**
+- Present any **defer**, **needs discussion**, or **architectural** findings to the developer
+- Include the reviewer's reasoning so the developer can make an informed call
+
+---
+
+## Step 6 — Developer review
+
+Present the changes to the developer for final review:
+
+1. **Show the diff summary** — list every file changed with a one-line description of what and why
+2. **Highlight key decisions** — anything non-obvious or where you chose between alternatives
+3. **Note remaining review findings** — anything surfaced in Step 5 that needs human judgment
+4. **Confirm test results** — report which checks passed
+
+Ask the developer:
+- "Are these changes ready to commit?"
+- "Any adjustments needed before I commit?"
+
+Once approved, commit with a message in the format:
+```
+<TICKET-ID>: <concise description of the fix>
+```
+
+### After commit
+
+1. **Push** the branch:
+   ```bash
+   git -C "$WT" push -u origin <branch>
+   ```
+2. **Transition the Jira ticket** to "PR" status using the Atlassian MCP `jira_transition_issue` tool.
+3. **Create a PR** if the developer wants one:
+   - Draft a PR title and body (summary, Jira link, test plan, screenshots if visual changes)
+   - **Present the draft to the developer for review before creating the PR.**
+   - Once the developer approves the PR content:
+     ```bash
+     cd "$WT" && gh pr create --title "<TICKET-ID>: <description>" --body "<approved-body>"
+     ```
+4. **Clean up the worktree** — proceed to Step 7.
+
+---
+
+## Step 7 — Clean up the worktree
+
+Once the branch is pushed to the remote, the local worktree is no longer needed. Remove it to keep the workspace tidy and free up disk space.
+
+```bash
+# Remove the worktree registration and delete the directory
+git -C "$MAMBA_REPO" worktree remove "$WT"
+```
+
+If the worktree has uncommitted changes (it shouldn't at this point), git will refuse to remove it. Use `--force` only if you're certain nothing valuable remains:
+
+```bash
+git -C "$MAMBA_REPO" worktree remove --force "$WT"
+```
+
+**Prune stale entries** — if the worktree directory was already deleted manually or by another process, clean up the bookkeeping:
+
+```bash
+git -C "$MAMBA_REPO" worktree prune
+```
+
+The branch itself is **not** deleted — it still exists on the remote and locally. This is intentional: the PR may need further work. To delete the local branch after the PR merges:
+
+```bash
+git -C "$MAMBA_REPO" branch -d <branch>
+```
+
+---
+
+## Parallel Agent Safety
+
+This workflow is designed for parallel execution. Key isolation guarantees:
+
+- **Each ticket gets its own worktree** — no shared working directory
+- **Branches combine prefix + ticket** — default `$USER/<TICKET-ID>` keeps parallel ticket work on distinct branch names per machine user; override `--prefix` when you need a shared or team convention
+- **No modifications to the main clone** — all work happens in the worktree sibling directory
+- **Independent Gradle daemons** — each worktree can run its own builds
+
+If two tickets touch the same files, the merge conflict is handled at PR time, not during development.

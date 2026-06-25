@@ -1,0 +1,28 @@
+---
+description: Route Mamba snapshot testing and weekly release work to the test-in-nikeapp and release-mamba skills.
+alwaysApply: true
+---
+
+# Mamba release and Nike App test skills
+
+When the user wants to **test a Mamba change in Nike App**, **hand off to QA**, or **run a Mamba release**, load the matching project skill from `.cursor/skills/`:
+
+| User intent | Skill | Path |
+|-------------|-------|------|
+| Test / verify in Nike App, snapshot + Jenkins, fast integration loop | `test-in-nikeapp` | `.cursor/skills/test-in-nikeapp/SKILL.md` |
+| Full QA handoff: snapshot → DIS build → TestFairy link → Jira QA transition | `mamba-qa-ready` | `.cursor/skills/mamba-qa-ready/SKILL.md` |
+| Weekly Mamba release, paired Mamba + Nike App PRs, publish release after merge | `release-mamba` | `.cursor/skills/release-mamba/SKILL.md` |
+
+**Trigger phrases (examples):**
+
+- `test in nike app`, `verify in nike app`, `snapshot and queue jenkins`, `integrate snapshot` → **test-in-nikeapp**
+- `qa ready`, `hand off to qa`, `mamba-qa-ready`, `make build qa ready`, `testfairy and jira` → **mamba-qa-ready**
+- `release mamba`, `release-mamba`, `weekly mamba release`, `open paired release PRs` → **release-mamba**
+
+**Branch convention for releases:** `release/mamba/vX.Y.Z` (e.g. `release/mamba/v48.1.0`) in both Mamba and Nike App repos.
+
+**Scripts:** composable helpers live under `scripts/lib/` — see `scripts/lib/README.md` and `docs/RELEASE_INTEGRATION_FLOW.md`.
+
+**Credentials:** both skills run a credentials preflight before publish or Jenkins. Setup: `docs/CREDENTIALS.md`.
+
+Do not duplicate `push-mamba-pr`, `pra-fix`, or `build-install-mamba` here — use those skills/rules for their specific tasks.

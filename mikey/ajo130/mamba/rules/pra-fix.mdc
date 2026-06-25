@@ -1,0 +1,125 @@
+---
+description: "Run PRA and pre-push checks, then automatically fix any failures. Invoke when asked to run checks, fix PRA issues, or prepare code for push."
+alwaysApply: false
+---
+
+# PRA & Pre-Push Fix Agent — mpe.app.mamba-android
+
+Run checks, diagnose failures, and fix them. All commands run from the project root (the workspace directory containing this `.cursor/rules/` folder).
+
+**Important:** All Gradle and `local-checks.sh` commands require `required_permissions: ["all"]` because the Gradle daemon needs unrestricted socket access.
+
+---
+
+## Step 0 — Identify changed modules
+
+Before running any Gradle tasks, determine which modules are affected:
+
+```bash
+git diff --name-only HEAD | sed 's|/src/.*||' | sort -u
+```
+
+Store these as `CHANGED_MODULES`. This enables scoped checks in later steps to avoid wasting time on unrelated modules with pre-existing issues.
+
+---
+
+## Step 1 — Run auto-fixes first (fix-before-check)
+
+Run auto-fixable tasks **before** checking. This avoids a wasted check→fail→fix→recheck cycle for spotless/sort/api issues, which are the most common failures:
+
+```bash
+./gradlew spotlessApply sortDependencies --parallel --build-cache
+```
+
+Then run `apiDump` only for changed modules (apiDump requires compilation, so scoping avoids pre-existing compilation failures in other modules):
+
+```bash
+./gradlew <module>:apiDump --parallel --build-cache
+```
+
+For example: `./gradlew :doorway-component:impl:apiDump :shop:impl:apiDump`
+
+---
+
+## Step 2 — Run verification checks
+
+Run checks scoped to changed modules where possible. Start with `spotlessCheck` (project-wide, fast, no compilation):
+
+```bash
+./gradlew spotlessCheck --parallel --build-cache
+```
+
+Then run detekt, apiCheck, and lint scoped to changed modules only:
+
+```bash
+./gradlew <module>:detekt <module>:apiCheck <module>:lint --parallel --build-cache
+```
+
+This avoids compilation of unrelated modules that may have pre-existing errors.
+
+If the user asks for a **full PRA** simulation, use the script instead (takes ~15 min):
+
+```bash
+./local-checks.sh --pra --json
+```
+
+If all checks pass, skip to Step 5 (Report).
+
+**Handling pre-existing compilation failures:** If a module you didn't change fails to compile (blocking detekt/apiCheck), exclude it and note it in the report. Only fix compilation errors in modules with your changes.
+
+---
+
+## Step 3 — Fix detekt issues in source code
+
+If detekt failed, read the report:
+
+```bash
+cat build/reports/detekt/detekt.xml
+```
+
+Or check the log in `_pra-results/` for the specific violations.
+
+**Rules for fixing detekt:**
+
+- **DO NOT** run `./gradlew detektBaseline` — fix the actual code.
+- **DO NOT** add `@Suppress("DetektRuleName")` annotations (mixed-case names are banned by the `SuppressRule` custom rule).
+- JVM-level suppressions like `@Suppress("UNCHECKED_CAST")` are fine.
+- Refer to `.cursor/rules/build-quality.mdc` for thresholds and examples.
+
+Common fixes:
+
+| Violation | Fix |
+|-----------|-----|
+| `CyclomaticComplexMethod` (>15) | Extract helper functions |
+| `LongMethod` (>80 lines) | Split into smaller functions |
+| `ComposableLongMethodRule` (>100 lines) | Extract sub-composables |
+| `MaxLineLength` (>120 chars) | Break the line |
+| `VarCouldBeVal` | Change `var` to `val` |
+| `MayBeConst` | Add `const` modifier |
+| `ReturnCount` (>2) | Restructure with `when` or early return |
+| `MagicNumber` | Extract to a named constant |
+| `UnusedPrivateMember` | Remove or use the member |
+| `DoNotUseAndroidLogCalls` | Replace `Log.x()` with the internal logger |
+| `ViewModelArchitecture` | Use exactly one `_state: MutableStateFlow` |
+| `CollectAsStateRule` | Replace `collectAsState()` with `collectAsStateWithLifecycle()` |
+| `ContextCastRule` | Replace `context as Activity` with `context.activity()` |
+
+---
+
+## Step 4 — Fix lint / test / build-health failures (full PRA only)
+
+- **lint**: Read `build/reports/lint-results-*.html` and fix the source code. Do NOT modify `lint-baseline.xml`.
+- **unit tests**: Read test reports under `build/reports/tests/` and fix failing tests.
+- **buildHealth**: Read `build/reports/dependency-analysis/build-health-report.txt` and adjust `build.gradle.kts` dependency declarations.
+
+---
+
+## Step 5 — Report results
+
+Summarize what was fixed:
+
+- Which checks failed initially
+- What auto-fix commands were run
+- Which files were manually edited and why
+- Final pass/fail status
+- Any pre-existing issues in other modules (note these so the user knows they're not regressions)

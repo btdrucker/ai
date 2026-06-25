@@ -1,0 +1,291 @@
+---
+description: "Write correct Shell commands the first time. Anticipates sandbox permissions, picks the right tool over shelling out, and uses patterns proven in this workspace. Apply to every Shell, Read, Write, StrReplace, Glob, and Grep call."
+alwaysApply: true
+---
+
+# Shell & Tool Command Playbook
+
+Derived from analyzing 30 real agent transcripts in this workspace over the last
+week (~557 Shell calls, 480 Reads, 406 StrReplaces, 234 Greps, 102 Globs). The
+two dominant sources of wasted turns were:
+
+1. **Sandbox escalations** — a command was run without `required_permissions`,
+   failed, then re-run with `["full_network"]` or `["all"]`. 13 clear
+   escalations in one week; some transcripts hit it 3+ times.
+2. **Shelling out instead of using the specialized tool** — 75 cases of
+   `find -name`, `cat | head`, `grep -r`, `rg`, `sed -i`, or `echo > file`
+   that should have been `Glob`, `Read`, `Grep`, `StrReplace`, or `Write`.
+
+Follow this playbook to avoid both classes.
+
+---
+
+## Rule 1 — Pick `required_permissions` up front, not after failure
+
+The sandbox allows filesystem reads, writes **inside the current workspace
+root only**, and network only to a small allowlist. Decide permissions from
+the command itself, not from retrying after it fails.
+
+### Decision table
+
+| Command shape | Required permissions |
+|---|---|
+| Read-only shell in workspace (`ls`, `cat`, `git status`, `git log`, `git diff`, `git show` on already-fetched refs) | *(none)* |
+| `git fetch`, `git pull`, `git push`, `gh …` (any network) | `["full_network"]` |
+| `git worktree add …` (writes to a sibling path outside workspace) | `["all"]` |
+| `git commit` / `git rebase` inside a worktree path **outside the current workspace root** | `["all"]` |
+| `./gradlew …` (Gradle daemon opens sockets and writes to `~/.gradle`) | `["all"]` |
+| `adb install` / `adb uninstall` / any `adb` with `-s <device>` | `["all"]` |
+| `python3 script.py` that writes outside the workspace | `["all"]` |
+| `chmod`, `mkdir -p` outside the workspace | `["all"]` |
+| Anything invoking `mise`, `tuist`, `fastlane`, `bundle exec` | `["all"]` |
+| `git fetch origin && git worktree add … origin/<branch>` (fetch + write outside workspace) | `["all"]` (covers both) |
+
+> **Shortcut:** if the command touches a path that is **not** under the current
+> Cursor workspace root, assume `["all"]`. If it touches the network and nothing
+> else, `["full_network"]`. If both, `["all"]` alone is sufficient — `all`
+> implies network.
+
+### Examples proven in this workspace
+
+```bash
+# Gradle build — ALWAYS ["all"]
+cd /Users/ajo130/code/mpe.app.mamba-android && ./gradlew :app:assembleWorldDebug 2>&1
+
+# Worktree add to sibling path — ALWAYS ["all"]
+cd /Users/ajo130/code/mpe.foundation.clickstream && \
+  git worktree add -b ajo/release-foundation-android-2.32.0 \
+    /Users/ajo130/code/mpe.foundation.clickstream--ajo-release-2.32.0 origin/main
+
+# Fetch only, reading stays in workspace — ["full_network"]
+git -C /Users/ajo130/code/mpe.app.mamba-android fetch origin
+
+# Operating on a worktree path outside the current workspace — ["all"]
+git -C /Users/ajo130/code/mpe.app.mamba-android--ajo-fix-ios-refs-in-ac-docs \
+  rebase origin/rdelgu/docs-ac-updates-april-2026
+
+# adb in a worktree install — ["all"]
+~/Library/Android/sdk/platform-tools/adb -s <DEVICE> install "<path-to-apk>"
+```
+
+### Anti-pattern seen repeatedly
+
+```bash
+# FIRST CALL (fails with sandbox error):
+cd /Users/ajo130/code/mpe.app.mamba-android && ./gradlew :app:assembleWorldDebug
+# SECOND CALL (succeeds, wasted a turn):
+cd /Users/ajo130/code/mpe.app.mamba-android && ./gradlew :app:assembleWorldDebug
+# required_permissions: ["all"]
+```
+
+Just pick `["all"]` from the start for any Gradle command.
+
+---
+
+## Rule 2 — Use specialized tools instead of Shell for file ops
+
+Shell invocations of file-search / file-read / file-edit utilities failed or
+produced noisy output in 75 cases last week. Use the tool purpose-built for
+the job.
+
+| Instead of Shell… | Use the tool |
+|---|---|
+| `find <dir> -name "*.kt"` | `Glob` with `glob_pattern: "**/*.kt"` |
+| `grep -r "pattern" <dir>` / `rg "pattern"` | `Grep` with `pattern` + `glob` / `type` filter |
+| `cat file.kt` / `head -40 file.kts` / `tail -n 20 log.txt` | `Read` (with `offset`/`limit` if needed) |
+| `sed -i 's/old/new/g' file` | `StrReplace` with `replace_all: true` |
+| `echo "content" > file` or heredoc-to-file | `Write` |
+
+### Concrete anti-patterns from last week
+
+```bash
+# BAD: shelling out to find files
+find /Users/ajo130/code/mpe.capability.clickstream/Android -name "*.kt" | head -20
+
+# GOOD: Glob tool
+# { "glob_pattern": "**/*.kt", "target_directory": "/Users/ajo130/code/mpe.capability.clickstream/Android" }
+```
+
+```bash
+# BAD: grep -r + cat pipelines for cross-file searches
+grep -r "Timber\|Log\." /Users/ajo130/code/mpe.capability.clickstream/Android --include="*.kt" -l
+
+# GOOD: Grep tool
+# { "pattern": "Timber|Log\\.", "path": "/Users/ajo130/code/mpe.capability.clickstream/Android", "glob": "*.kt", "output_mode": "files_with_matches" }
+```
+
+```bash
+# BAD: cat with head slicing
+cat Android/clickstream/build.gradle.kts | head -40
+
+# GOOD: Read tool
+# { "path": ".../build.gradle.kts", "limit": 40 }
+```
+
+```bash
+# BAD: sed -i for code edits
+sed -i '' 's/onCarouselCardSettled/onCarouselCardViewed/g' components/doorway/impl/src/main/kotlin/.../DoorwayView.kt
+
+# GOOD: StrReplace with replace_all
+# { "path": ".../DoorwayView.kt", "old_string": "onCarouselCardSettled", "new_string": "onCarouselCardViewed", "replace_all": true }
+```
+
+```bash
+# BAD: echo > README.md for new file creation
+mkdir -p /Users/ajo130/code/agent-manager && echo "# agent-manager" > README.md
+
+# GOOD: mkdir in Shell (creating dir structure is legitimate Shell work),
+#       then Write tool for the file
+```
+
+> **Reserve Shell for real shell work**: `git` operations, `gradle`, `adb`,
+> `gh`, `mise`, process management, and command chaining/piping that has no
+> tool equivalent.
+
+---
+
+## Rule 3 — Shell command hygiene
+
+From observed retries and noisy output:
+
+- **Always quote paths containing spaces.** We don't have many in this tree
+  but `/Users/ajo130/My Documents`-style paths fail silently.
+- **Chain with `&&`, not `;`**, unless you genuinely want subsequent commands
+  to run after a failure. `;` hides failures in chained probes.
+- **Pipe to `head -N` or `tail -N`** for any command that could emit >200
+  lines (e.g. `git log`, `find`, `grep`, `gradle` output). Unbounded output
+  burns context and the user's tokens.
+- **Use `2>&1` on Gradle / test / build commands.** Gradle writes error
+  detail to stderr; missing it produces a useless "BUILD FAILED" with no
+  cause.
+- **Use `git -C <path>`** instead of `cd <path> && git …` when the work is a
+  single git command. `cd` chains are slightly more error-prone because
+  later commands in the shell session don't inherit the cwd (Shell tool is
+  stateful in **this** call but not across calls).
+- **For long-running commands (Gradle, tests, builds)** set
+  `block_until_ms` generously (60–180s for compile, 300s+ for full build)
+  or `block_until_ms: 0` to background and then `AwaitShell`. Do **not**
+  let default 30s kill a Gradle first-run.
+
+### Gradle output: always tail
+
+```bash
+# GOOD
+cd /Users/ajo130/code/mpe.app.mamba-android && \
+  ./gradlew :features:component-preview:impl:kspDebugKotlin --no-daemon 2>&1 | tail -60
+# required_permissions: ["all"]
+```
+
+---
+
+## Rule 4 — File edits: prevent StrReplace uniqueness failures
+
+StrReplace fails when `old_string` is not unique in the file. Observed
+pattern: agent wrote a short `old_string`, call failed, agent re-called with
+the same string expanded to include surrounding context. One roundtrip
+wasted.
+
+**Up-front guidance:**
+
+- Include **at least 3–5 lines of context** around the change point.
+- For renames across a file, use `replace_all: true` with a short, unique
+  token (identifier name, not a line fragment).
+- Before editing, `Read` the exact region you intend to change. Copy the
+  `old_string` directly from the Read output (including leading whitespace).
+- If a string might legitimately appear twice (e.g. a repeated boilerplate
+  block), include a unique sibling line above or below.
+
+---
+
+## Rule 5 — Read tool usage
+
+- **Default to reading the whole file** (no offset/limit). Truncation
+  only when the file is >1000 lines or you already know the region.
+- **Negative offsets** (`offset: -80`) work and are the correct way to
+  read the tail of a large log / terminal file.
+- For **Cursor terminal files** (`~/.cursor/projects/<slug>/terminals/<pid>.txt`),
+  the file updates continuously; read near the end with a negative offset
+  rather than from line 1. The first ~10 lines are metadata.
+- If `Read` fails with "Operation not permitted" on a path outside the
+  workspace (`~/.cursor/plans/`, sibling worktrees, other repos), use Shell
+  with `required_permissions: ["all"]` — don't retry the Read tool on it.
+
+---
+
+## Rule 6 — Worktree commands
+
+Worktrees live in sibling directories (e.g. `mpe.app.mamba-android--ajo-foo`).
+Any operation on them is **outside** the current workspace sandbox root.
+
+**Always pass `["all"]` for:**
+- `git worktree add …`
+- Any `git -C <worktree-path> …` that writes (commit, rebase, push, checkout)
+- Running build / test / script commands `cd <worktree-path> && …`
+
+Read-only inspection of a worktree's contents via the `Read` tool works
+without Shell — Read can cross workspace roots for **reads**.
+
+---
+
+## Rule 7 — MCP tools: check the descriptor before calling
+
+For any MCP `CallMcpTool` invocation:
+
+1. First inspect the descriptor at
+   `/Users/ajo130/.cursor/projects/<slug>/mcps/<server>/tools/<tool>.json` if
+   you haven't called that specific tool in this session.
+2. Don't retry the same MCP call verbatim after an error (observed:
+   `mobile_list_available_devices` called twice in a row with identical
+   args). If the first call errored, read the error, adjust args, and
+   call with different inputs — or fall back to the Shell equivalent
+   (`xcrun simctl`, `adb`).
+
+---
+
+## Rule 8 — Failure recovery protocol
+
+When a command **does** fail despite the rules above:
+
+1. **Read the error carefully** for the specific cause. The sandbox error
+   line explicitly tells you whether you need `full_network` or `all`.
+2. **Do not retry identically.** If the exact same call failed, changing
+   nothing and calling again will not succeed.
+3. **If it's a permissions error**, add the permission and retry exactly once.
+4. **If it's a "not found" / wrong path**, verify with `Glob` or `ls`
+   before retrying.
+5. **If it's a StrReplace uniqueness error**, expand `old_string` with
+   surrounding context — do not try a different short string.
+6. **After 2 failed attempts**, stop and ask the user with `AskQuestion`
+   or switch to `SwitchMode` → plan.
+
+---
+
+## Rule 9 — Cursor-specific conventions in this repo
+
+- **Worktree naming:** `<repo-dir>--<sanitized-branch>` (e.g.
+  `mpe.app.mamba-android--ajo130-MMBA-1980`). Slashes in branch names
+  become `-`.
+- **Commit messages:** include ticket id if present (`MMBA-1234: …`).
+- **PRA checks:** see `.cursor/rules/pra-fix.mdc`. All its Gradle commands
+  need `["all"]`.
+- **Mamba iOS builds:** never run `xcodebuild` directly — use the
+  xcode-tools MCP per `AGENTS.md`.
+- **Push hooks:** some branches legitimately need `--no-verify` (lint
+  carve-outs, tag pushes). When a push fails and the user says "use no
+  verify", pass `--no-verify` on that single attempt only.
+
+---
+
+## Quick pre-flight checklist before any Shell call
+
+Ask yourself, in order:
+
+1. **Does a specialized tool cover this?** (Read/Write/Glob/Grep/StrReplace) → use it.
+2. **Does this command touch the network?** → `["full_network"]` at minimum.
+3. **Does this command write outside the current workspace root?** → `["all"]`.
+4. **Does this command invoke Gradle / mise / fastlane / adb / bundle?** → `["all"]`.
+5. **Will output exceed 200 lines?** → pipe to `head`/`tail`.
+6. **Is this a long-running build/test?** → raise `block_until_ms` to 120000+.
+7. **Am I chaining commands?** → use `&&` not `;`.
+
+If you walked through these, you will almost never need a retry.

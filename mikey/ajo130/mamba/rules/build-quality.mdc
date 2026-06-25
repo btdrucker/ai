@@ -1,0 +1,396 @@
+---
+description: "Build quality rules enforced by pre-push hooks and PRA CI. Covers Detekt, Spotless formatting, API compatibility, dependency sorting, and dependency management. Zero-tolerance policy: maxIssues = 0."
+globs: ["*.kt", "*.kts", "*.gradle.kts"]
+---
+
+# Build Quality Rules — mpe.app.mamba-android
+
+> These rules are enforced by automated checks. Code that violates ANY rule will be rejected by the pre-push hook or PRA CI. Detekt is configured with `maxIssues: 0` — a single violation fails the build.
+
+---
+
+## 1. Formatting (Spotless / ktfmt)
+
+Formatting is enforced by Spotless using **ktfmt 0.43 kotlinlang style**.
+
+- **Max line length:** 120 characters
+- **Trailing whitespace:** must be trimmed
+- **End of file:** must end with a newline
+- **Wildcard imports:** forbidden (exception: `java.util.*`)
+- **Composable function naming:** PascalCase is allowed for `@Composable` functions (`.editorconfig` exception)
+- **Kotlin files:** ktfmt kotlinlang style (NOT Google style, NOT AOSP style)
+- **Java files:** Google Java Format (AOSP style)
+- **Misc files:** `.md`, `.gitignore`, `*.xml`, `*.gradle` — trim trailing whitespace, end with newline
+
+Do NOT manually format — Spotless handles it. But write code that conforms so diffs are clean.
+
+---
+
+## 2. Detekt Standard Rules — Key Thresholds
+
+Full config: `config/detekt/detekt.yml`. Below are the thresholds most likely to be hit.
+
+### Complexity
+
+| Rule | Threshold | Notes |
+|------|-----------|-------|
+| `CyclomaticComplexMethod` | 15 | Break up complex logic into smaller functions |
+| `LongMethod` | 80 lines | `@Preview` functions are exempt |
+| `LargeClass` | 600 lines | Split into multiple classes/files |
+| `LongParameterList` | 15 (functions), 7 (constructors) | Data classes are exempt |
+| `TooManyFunctions` | 12 (files), 16 (classes/interfaces) | Tests are exempt |
+| `ComplexCondition` | 4 conditions | Extract conditions to named booleans |
+| `NestedBlockDepth` | 4 levels | Use early returns or extract functions |
+
+### Style
+
+| Rule | Constraint |
+|------|-----------|
+| `MaxLineLength` | 120 chars (package/import/raw strings exempt) |
+| `ReturnCount` | Max 2 returns per function |
+| `ThrowsCount` | Max 2 throws per function |
+| `DestructuringDeclarationWithTooManyEntries` | Max 3 entries |
+| `WildcardImport` | Forbidden (except `java.util.*`) |
+| `ForbiddenComment` | No `FIXME:` or `STOPSHIP:` markers |
+| `VarCouldBeVal` | Always use `val` unless mutation is required |
+| `MayBeConst` | Use `const val` for compile-time constants |
+| `ModifierOrder` | Follow Kotlin modifier ordering |
+| `ForbiddenVoid` | Use `Unit` not `Void` |
+| `ExplicitItLambdaParameter` | Don't use explicit `it` parameter name |
+
+### Unused Code
+
+| Rule | Notes |
+|------|-------|
+| `UnusedPrivateMember` | `@Preview` functions are exempt |
+| `UnusedParameter` | Name as `ignored` or `expected` to suppress |
+| `UnusedPrivateProperty` | Name as `_`, `ignored`, `expected`, or `serialVersionUID` to suppress |
+| `UnusedPrivateClass` | Remove unused classes |
+
+### Exceptions
+
+```kotlin
+// BAD: Empty catch block
+try { doSomething() } catch (e: Exception) { }
+
+// OK: Named exception for intentional ignore
+try { doSomething() } catch (_: SpecificException) { }
+
+// BAD: Too generic exception
+try { doSomething() } catch (e: Exception) { handle(e) }
+
+// GOOD: Specific exception
+try { doSomething() } catch (e: IOException) { handle(e) }
+
+// BAD: Throwing without message
+throw IllegalStateException()
+
+// GOOD: Always include message or cause
+throw IllegalStateException("Expected state X but found Y")
+```
+
+- `EmptyCatchBlock`: forbidden (exception names: `_`, `ignore*`, `expected*`)
+- `SwallowedException`: forbidden
+- `TooGenericExceptionCaught`: don't catch `Exception`, `RuntimeException`, `Throwable`, `Error`, `NullPointerException`
+- `TooGenericExceptionThrown`: don't throw `Exception`, `RuntimeException`, `Throwable`, `Error`
+- `ThrowingExceptionsWithoutMessageOrCause`: always include message or cause
+
+### Coroutines
+
+```kotlin
+// BAD: Hardcoded dispatcher
+viewModelScope.launch(Dispatchers.IO) { }
+
+// GOOD: Injected dispatcher
+class MyViewModel @Inject constructor(
+    private val dispatcher: CoroutineDispatcher
+) : ViewModel() {
+    fun doWork() = viewModelScope.launch(dispatcher) { }
+}
+
+// BAD: Thread.sleep in coroutine
+suspend fun waitForResult() { Thread.sleep(1000) }
+
+// GOOD: Use delay
+suspend fun waitForResult() { delay(1000) }
+
+// BAD: Suspend function returning Flow
+suspend fun getItems(): Flow<List<Item>> = flow { }
+
+// GOOD: Non-suspend function returning Flow
+fun getItems(): Flow<List<Item>> = flow { }
+```
+
+- `InjectDispatcher`: inject `IO`, `Default`, `Unconfined` dispatchers
+- `SleepInsteadOfDelay`: use `delay()` not `Thread.sleep()`
+- `SuspendFunWithFlowReturnType`: suspend functions must not return Flow
+- `RedundantSuspendModifier`: don't mark functions as `suspend` if they don't actually suspend
+
+### Potential Bugs
+
+- `HasPlatformType`: always specify explicit return types (no platform types from Java interop)
+- `UnsafeCallOnNullableType`: no `!!` operator (tests are exempt)
+- `UnsafeCast`: avoid unsafe casts; use `as?` instead
+- `DoubleMutabilityForCollection`: don't use `var` with mutable collections
+- `AvoidReferentialEquality`: don't use `===` with `String`
+
+---
+
+## 3. Custom Nike Detekt Rules
+
+These 8 rules are project-specific and enforced in addition to standard Detekt.
+
+### Rule 1: DoNotUseAndroidLogCalls
+
+```kotlin
+// BAD — fails detekt
+Log.d("TAG", "message")
+Log.e("TAG", "error", exception)
+
+// GOOD — use internal logging framework
+logger.debug("message")
+logger.error("error", exception)
+```
+
+NEVER use `Log.d()`, `Log.i()`, `Log.e()`, `Log.v()`, or `Log.w()`.
+
+### Rule 2: ViewModelArchitecture
+
+```kotlin
+// BAD — missing _state, or multiple MutableStateFlows
+class MyViewModel : ViewModel() {
+    private val _uiState = MutableStateFlow(UiState())      // wrong name
+    private val _otherState = MutableStateFlow(OtherState()) // multiple flows
+}
+
+// GOOD — exactly one _state: MutableStateFlow
+class MyViewModel : ViewModel() {
+    private val _state = MutableStateFlow<MyState>(MyState.Loading)
+    val state = _state.asStateFlow()
+}
+```
+
+- Every ViewModel MUST have exactly one property named `_state` of type `MutableStateFlow`
+- NEVER have multiple `MutableStateFlow` properties in a ViewModel
+- At most ONE `MutableSharedFlow` property per ViewModel
+
+### Rule 3: StateAsComposableParameter
+
+```kotlin
+// BAD — State/StateFlow as parameter
+@Composable
+fun MyScreen(state: State<UiState>) { }
+
+@Composable
+fun MyScreen(stateFlow: StateFlow<UiState>) { }
+
+// GOOD — pass unwrapped values
+@Composable
+fun MyScreen(uiState: UiState) { }
+
+@Composable
+fun MyScreen(items: List<Item>, isLoading: Boolean) { }
+```
+
+NEVER pass `State<T>`, `MutableState<T>`, `StateFlow<T>`, or `MutableStateFlow<T>` as `@Composable` function parameters.
+
+### Rule 4: CollectAsStateRule
+
+```kotlin
+// BAD — collectAsState
+val state by viewModel.state.collectAsState()
+
+// GOOD — lifecycle-aware collection
+val state by viewModel.state.collectAsStateWithLifecycle()
+```
+
+ALWAYS use `collectAsStateWithLifecycle()`. NEVER use `collectAsState()`.
+
+### Rule 5: ComposableLongMethodRule
+
+```kotlin
+// BAD — @Composable exceeding 100 non-blank lines
+@Composable
+fun MyScreen() {
+    // ... 101+ non-blank lines of code ...
+}
+
+// GOOD — extract sub-composables
+@Composable
+fun MyScreen() {
+    Column {
+        HeaderSection()
+        ContentSection()
+        FooterSection()
+    }
+}
+```
+
+- `@Composable` functions must not exceed **100 non-blank lines**
+- `@Preview` functions are exempt
+- Extract sub-composables to stay under the limit
+
+### Rule 6: ComposeViewCompositionStrategyRule
+
+```kotlin
+// BAD — ComposeView without composition strategy
+val composeView = ComposeView(context)
+
+// GOOD — always set DisposeOnViewTreeLifecycleDestroyed
+ComposeView(context).apply {
+    setViewCompositionStrategy(
+        ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
+    )
+    setContent { MyComposable() }
+}
+```
+
+When creating a `ComposeView`, ALWAYS call `setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)` inside an `.apply {}` block.
+
+### Rule 7: SuppressRule
+
+```kotlin
+// BAD — suppressing Detekt rules inline
+@Suppress("LongParameterList")
+fun myFunction(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int) { }
+
+// OK — JVM/compiler suppressions (ALL_CAPS with underscores) are fine
+@Suppress("UNCHECKED_CAST")
+val items = rawList as List<String>
+
+// GOOD — for legitimate Detekt exceptions, use the baseline
+// Run: ./gradlew detektBaseline
+```
+
+- NEVER use `@Suppress("DetektRuleName")` (mixed-case rule names) inline
+- JVM suppressions like `@Suppress("UNCHECKED_CAST")` are allowed (all-caps/underscores pattern)
+- For genuine Detekt exceptions, add to baseline via `./gradlew detektBaseline`
+
+### Rule 8: ContextCastRule
+
+```kotlin
+// BAD — casting Context to Activity
+val activity = context as Activity
+val activity = context as? Activity
+
+// GOOD — use extension function
+val activity = context.activity()
+```
+
+NEVER cast `Context` to `Activity`. Use the `Context.activity()` extension function from `:android-extensions`.
+
+---
+
+## 4. API Compatibility (apiCheck)
+
+Public API changes are tracked in `.api` files via the Binary Compatibility Validator.
+
+- **Prefer `internal` visibility** — only use `public` in `api/` modules
+- After intentionally changing a public API: run `./gradlew apiDump` and commit the updated `.api` files
+- Never remove or change the signature of an existing public API without deprecation
+- The `app`, `dagger-spi-processor`, `detekt-rules`, and `kommand` modules are excluded from API validation
+
+```bash
+# After making intentional public API changes:
+./gradlew apiDump
+git add **/api/*.api
+```
+
+---
+
+## 5. Dependency Sorting
+
+Dependencies in `.gradle.kts` files MUST be alphabetically sorted within each configuration block.
+
+```kotlin
+// BAD — unsorted
+dependencies {
+    implementation(libs.hilt.android)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.compose.foundation)
+}
+
+// GOOD — alphabetically sorted within each block
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.compose.foundation)
+    implementation(libs.hilt.android)
+
+    testImplementation(libs.assertk)
+    testImplementation(libs.junit)
+    testImplementation(libs.turbine)
+}
+```
+
+- Run `./gradlew sortDependencies` to auto-sort
+- Run `./gradlew checkSortDependencies` to verify
+
+---
+
+## 6. Dependency Management
+
+ALL dependency versions are managed in `gradle/libs.versions.toml`.
+
+```kotlin
+// BAD — hardcoded version
+implementation("androidx.core:core-ktx:1.16.0")
+
+// GOOD — version catalog reference
+implementation(libs.androidx.core.ktx)
+```
+
+**When adding a new dependency:**
+1. Add the version to `[versions]` in `gradle/libs.versions.toml`
+2. Add the library entry to `[libraries]`
+3. Reference via `libs.<alias>` in the `.gradle.kts` file
+4. Keep the entry alphabetically sorted
+
+**buildHealth enforces:**
+- No unused dependencies (`severity: fail`)
+- No unused annotation processors (`severity: fail`)
+- No redundant plugins (`severity: fail`)
+- Correct dependency configurations — use `implementation` vs `api` vs `compileOnly` correctly (`severity: fail`)
+- Remove a dependency if you remove the code that uses it
+
+---
+
+## 7. Android Lint
+
+- Android Lint must pass: `./gradlew lint`
+- Do NOT introduce new lint warnings
+- Existing issues are tracked in module-level `lint-baseline.xml` files — do NOT modify baselines
+- Fix lint issues in your code rather than suppressing or baselining them
+
+---
+
+## 8. Pre-Push & PRA Quick Reference
+
+### Pre-push hook (runs automatically before `git push`):
+1. `./gradlew detekt` — static analysis
+2. `./gradlew apiCheck` — binary compatibility
+3. `./gradlew sortDependencies` — dependency ordering
+4. `./gradlew spotlessApply` — auto-format code
+
+### PRA CI (runs on every pull request):
+1. `spotlessCheck` — verify formatting
+2. `checkSortDependencies` — verify dependency order
+3. `apiCheck` — binary compatibility
+4. `detekt` — static analysis
+5. `lint` — Android lint
+6. `test` — unit tests
+7. `assemble` — build verification
+8. `buildHealth` — dependency hygiene
+
+### Local verification:
+```bash
+# Run all pre-push checks manually
+./pre-validation.sh
+
+# Or run individually
+./gradlew detekt
+./gradlew spotlessCheck
+./gradlew apiCheck
+./gradlew checkSortDependencies
+./gradlew lint
+./gradlew buildHealth
+```

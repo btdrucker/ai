@@ -1,0 +1,92 @@
+---
+description: "Diagnose Shop content pipeline issues — why content is missing, where it's bucketed, or data problems"
+alwaysApply: false
+---
+
+# /debug-shop-content
+
+When this command is invoked, read and apply the diagnostic reference at `docs/shop-content-pipeline-diagnostics.md`.
+
+## Charles Session File Analysis
+
+If the user provides a `.chlsj` file (Charles JSON Session), parse it to extract pipeline-relevant data before diagnosing. If the user asks a content question and hasn't provided a Charles file, suggest they provide one — it can answer the first several debugging steps automatically.
+
+### File Format
+
+A `.chlsj` file is just JSON — a JSON array of HTTP transaction objects. Read it directly with the Read tool. Each entry has:
+
+```
+{
+  "status": "COMPLETE",
+  "method": "GET",
+  "host": "connect.nike.com" or "connect-staging.nike.com",
+  "path": "/nike.service.content.product_card.v1.ProductCardService/GetCards",
+  "query": "base64=1&connect=v1&encoding=json&message=<base64-encoded-request>",
+  "request": { "header": {...}, "body": {...} },
+  "response": { "status": 200, "sizes": { "body": 1699 }, "body": { "text": "..." } }
+}
+```
+
+Connect API requests use GET with the request message base64-encoded in the `query` parameter (`message` key). Decode it to see request fields (channel, marketplace, language, product codes, tags, etc.).
+
+Response bodies are in `response.body.text` when the Charles export included bodies. If `response.body` is empty `{}`, the export was done without bodies — note this to the user and explain that re-exporting with "Include Bodies" enabled would allow deeper analysis.
+
+### Extraction Steps
+
+Parse the `.chlsj` and build a diagnostic summary:
+
+1. **Identify all Shop pipeline API calls** by matching these paths:
+
+   | Path contains | API | Pipeline role |
+   |---------------|-----|---------------|
+   | `ShopService/GetShopNavMenu` | Nav menu | Shop tag extraction |
+   | `ShopService/GetShops` | Shop layout | Carousel config, pins, tag filters |
+   | `ContentFeedService/GetFeed` | Feed content | Shared pool (product cards, product wall cards, spotlights, product recs) |
+   | `ProductCardService/GetCards` | Product cards | Content pool (direct fetch path) |
+   | `ProductWallCardService/GetCards` | Product wall cards | Content pool (direct fetch path) |
+   | `DoorwayService/GetDoorways` | Doorways | Doorway carousel config |
+   | `ShopService/GetBanners` | Banners | Banner display |
+   | `ProductService/GetProduct` | Single product fetch | Hydration (product card without media) |
+   | `ProductService/GetProductDisplayGroups` | Product group fetch | Hydration (product wall card bento) |
+   | `RecommendationsService/GetRecommendations` | Product recs | Feed rec cards |
+   | `ContentFeedService/FetchCDPProfile` | CDP profile | Personalization/ranking |
+   | `ContentFeedService/FetchRankingConfig` | Ranking config | Scoring parameters |
+
+2. **Decode request messages** — URL-decode the `query` string, extract the `message` param, base64-decode it to get the JSON request. Key fields to extract:
+   - `GetShops`: `tag.value` → the active shop tag (e.g., `gender.women`)
+   - `GetProduct`: `productCode.value` → which products are being hydrated
+   - `GetRecommendations`: `shop_tag`, `taxonomy`, `is_personalized`
+
+3. **Check for failures** — Any entry with `response.status` != 200 indicates a problem:
+   - `GetProduct` returning 404 → that product card will be **DROPPED** during hydration
+   - `GetFeed` / `GetCards` returning non-200 → entire content type missing from shared pool
+   - `GetShops` failing → no shop layout, nothing renders
+
+4. **If response bodies are present** (`response.body.text` is non-empty), parse the JSON to extract:
+   - From `GetFeed` / `GetCards` (ProductCard): card `metadata.id` values, variant tags, featured windows, assets
+   - From `GetFeed` / `GetCards` (ProductWallCard): card `metadata.id` values, variant tags, concept_ids, card_type
+   - From `GetShops`: carousel `carousel_included_tags`, `max_item_count`, `is_featured`, `pinned_items`
+   - From `GetDoorways`: doorway carousel configurations
+
+5. **Present the diagnostic summary** showing:
+   - Shop tag in use
+   - API call status (success/failure for each pipeline API)
+   - Failed product hydrations (404 GetProduct calls with their product codes)
+   - Content counts (number of product cards, wall cards from response sizes)
+   - If bodies available: tag analysis, featured window status, carousel config
+
+## Workflow
+
+1. **Read the diagnostics doc** — Load `docs/shop-content-pipeline-diagnostics.md` in full before answering.
+2. **If a `.chlsj` file is provided**, parse it using the extraction steps above to pre-answer pipeline stages 1 (fetch failures), 6 (hydration drops), and context for stages 2-4 (tags, featured, claiming).
+3. **If no `.chlsj` file is provided**, suggest the user provide one: "If you have a Charles session file (.chlsj) from the session, I can automatically check which API calls succeeded/failed, which products failed hydration, and what shop/carousel configuration was active."
+4. **Identify the question type:**
+   - "Why don't I see this content?" → Walk through every pipeline stage using the Data Issue Checklist.
+   - "Where is this content bucketed?" → Trace through the shared pool claiming cascade in Stage 4.
+   - "Is there a data issue?" → Use the API Payload → Pipeline Field Mapping to check field values.
+5. **If the user provides a component ID or product code**, cross-reference it against the Charles data (was it in the API response? did its GetProduct hydration call succeed?) and the pipeline stages.
+6. **Reference related docs as needed:**
+   - `docs/shop-algorithm.md` — for scoring/ranking questions
+   - `docs/shop-assembly-flow.md` — for assembly orchestration and pool dedup questions
+   - `docs/shop-nav-menu-selection.md` — for shop tag and nav menu selection questions
+   - `docs/shop-selection.md` — for shop variant selection questions

@@ -1,0 +1,14 @@
+---
+description: Minimize unnecessary changes when editing code
+alwaysApply: true
+---
+
+# Minimize Unnecessary Edits
+
+When making code changes, only touch what is required for the task. Specifically:
+
+- **Do not reformat unchanged lines.** If a line is not being modified, leave its whitespace, line breaks, and indentation exactly as-is.
+- **Do not remove valid comments.** Only remove a comment if the code it describes is itself being deleted. If the code is changing but the comment still applies, keep and update it.
+- **Do not reorder unchanged code.** Keep the original order of declarations, parameters, and blocks unless reordering is the explicit goal.
+- **Prefer `StrReplace` over full-file rewrites.** Use targeted replacements so the diff is minimal and reviewable. Only rewrite an entire file when the changes are so pervasive that targeted edits would be harder to follow.
+- **Match the surrounding style.** Adopt the line-break style, annotation placement, and spacing of the existing code in the file — don't normalize to a different convention.

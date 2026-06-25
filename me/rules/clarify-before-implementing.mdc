@@ -1,0 +1,28 @@
+---
+description: Clarify requirements fully before starting implementation
+alwaysApply: true
+---
+
+# Clarify Before Implementing
+
+Before writing any code, fully understand the task.
+
+## Steps
+
+1. **Identify ambiguities** — scope, affected files, edge cases, constraints, and expected behavior.
+2. **Ask questions** — surface all unknowns upfront in a single message rather than one at a time.
+3. **State assumptions explicitly** — if you infer something that isn't explicit, say so and ask for confirmation.
+4. **For complex tasks with extended back-and-forth clarification**, ask "Ready to implement?" before writing any code.
+
+## What counts as "complex"
+
+- Task touches multiple files or systems
+- Requirements evolved or were revised during discussion
+- There are meaningful trade-offs in approach
+- The user has not yet confirmed a specific design
+
+## Do not
+
+- Start implementing while open questions remain
+- Assume scope without stating the assumption
+- Ask questions one at a time when several can be batched

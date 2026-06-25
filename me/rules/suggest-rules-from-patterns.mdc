@@ -1,0 +1,26 @@
+---
+description: Suggest creating a rule or skill when the same task or bug pattern recurs
+alwaysApply: true
+---
+
+# Suggest Rules and Skills for Repeated Patterns
+
+When you notice a repeated task or bug pattern, proactively suggest codifying it as a rule or skill.
+
+## Triggers
+
+Suggest when:
+- The user says "again", "same as before", "another one of these", or describes a recurring problem
+- You perform the same type of fix, refactor, or setup a second time in this session
+- The user manually corrects the same kind of mistake twice (e.g., formatting, naming, structure)
+
+## What to suggest
+
+- **Rule** — if the pattern is about coding conventions, how to structure code, or how the agent should respond
+- **Skill** — if the pattern is a multi-step workflow the agent should follow end-to-end
+
+## How to surface it
+
+After completing the repeated task, append a brief note (don't make it the focus):
+
+> "You've done [X] a few times now — want me to write a rule/skill so this is handled automatically?"

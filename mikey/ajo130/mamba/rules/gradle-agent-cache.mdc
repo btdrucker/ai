@@ -1,0 +1,26 @@
+---
+description: "Use the warm user Gradle cache for agent-run Gradle commands."
+alwaysApply: true
+---
+
+# Agent Gradle Cache
+
+When an agent runs Gradle in this repo, use the user's warm Gradle cache instead of Cursor's isolated sandbox cache.
+
+Always prefix Gradle and local build/check commands with:
+
+```bash
+GRADLE_USER_HOME="$HOME/.gradle"
+```
+
+Examples:
+
+```bash
+GRADLE_USER_HOME="$HOME/.gradle" ./gradlew help --no-daemon
+GRADLE_USER_HOME="$HOME/.gradle" ./gradlew detekt apiCheck --parallel --build-cache
+GRADLE_USER_HOME="$HOME/.gradle" ./local-checks.sh --pra --json
+```
+
+Keep using `required_permissions: ["all"]` for Gradle commands because Gradle daemon/build tooling needs unrestricted filesystem and socket access.
+
+Reason: Cursor agents may default `GRADLE_USER_HOME` to an isolated cache under `/var/folders/.../cursor-sandbox-cache`, which can miss already-downloaded Android artifacts from `~/.gradle` and trigger network failures when resolving Google Maven dependencies.
